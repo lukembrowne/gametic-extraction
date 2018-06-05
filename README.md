@@ -1,7 +1,7 @@
 Modified Twogener gametic extraction
 ================
 Luke Browne
-6/2/2018
+June 04 2018
 
 Overview
 --------
@@ -343,7 +343,8 @@ extract_gametes <- function(leaf,
         sink(paste("./paternal_gametes", label, suffix))
         
           ## First line - Number of loci, number of individuals, and total samples per population
-          cat("8", nrow(leaf), length(table(leaf$PLOT)), as.numeric(table(leaf$PLOT)),"\n", sep = "\t")
+          cat(length(attributes(seed)$locus.names), nrow(leaf), 
+              length(table(leaf$PLOT)), as.numeric(table(leaf$PLOT)),"\n", sep = "\t")
           ## Second line is 3 tabs followed by population names
           cat("","", "", names(table(leaf$PLOT)), "\n", sep = "\t")
           
