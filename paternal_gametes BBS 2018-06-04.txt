@@ -1,4 +1,4 @@
-8	194	17	12	7	12	12	12	13	12	12	11	8	8	9	11	17	12	12	14	
+9	194	17	12	7	12	12	12	13	12	12	11	8	8	9	11	17	12	12	14	
 			Random_01	Random_03	Random_05	Random_06	Random_07	Random_08	Random_20	Random_21	Random_22	Random_23	Random_25	Random_27	Random_28	Random_29	Random_30	Random_31	Random_32	
 FIELD_NUMBER	PLOT	Ob03_1	Ob10_1	Ob04_1	Ob16_1	Ob12_1	Ob22_1	Ob06_1	Ob07_1	Ob23_1	UTM1	UTM2
 07-0198	Random_01	NA	NA	137	138	NA	167	191	173	225	643994	38493
