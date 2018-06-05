@@ -1,30 +1,351 @@
 ---
 title: "Modified Twogener gametic extraction"
-author: "LB"
+author: "Luke Browne"
 date: "6/2/2018"
 output: rmarkdown::github_document
+#output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
+## Overview
 
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-test
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+This R script provides the code for a modified Twogener gametic extraction used in Browne & Karubian (*in review*). The goal is to determine whether an allele in a biparentally inherited genotype of a seedling came from the maternal or parternal tree. This is useful for determing the separate and combined impacts of pollen and seed dispersal on genetic diversity and structure. We can accomplish this if we have genotype data from biparentally inherited leaf tissue and maternally inherited seedling tissue from the same individual plant. We also need to identify and handle the ambiguous cases where it is unclear whether an allele comes from the paternal or maternal tree. 
 
-```{r cars}
-summary(cars)
+## Reading in data
+
+* The script assumes that the genetic data is formatted in Genalex format (http://biology-assets.anu.edu.au/GenAlEx/Welcome.html), but the code could be modified to accept a variety of file formats.
+
+* There must be two separate files for the genotypes of biparentally inherited leaf tissue, and maternally inherited seed tissue. Importantly, the samples in each file must be in the same order!
+
+* Example data files are available in github repo.
+
+* Code will also have to be modified accordingly if column names are not are different from the example files.
+
+
+
+```{r read_data, echo=TRUE}
+# If readGenalex is not installed
+    # install.packages("devtools")
+    # devtools::install_github("douglasgscofield/readGenalex")
+  
+  library(readGenalex) 
+
+# Load in a single Genalex format file for the seed genotypes
+    seed <- readGenalex("./Seed genotypes BILSA GENALEX 2017_02_17.txt")
+    head(seed)
+
+  # Another Genalex format file for the leaf genotypes
+    leaf <- readGenalex("./Leaf genotypes BILSA GENALEX 2017_03_11.txt")
+    head(leaf)
+    
+  # Make sure leaf and seed files are in the same order
+    # Should return TRUE if they are in the same order
+    identical(seed$FIELD_NUMBER, leaf$FIELD_NUMBER)
+    
+  # Get UTM coordinates / spatial locations of seedlings
+    # These data were provided in the Genalex files, as columns appended to the allele calls
+    seedling_utms <- attributes(seed)$extra.columns  
+  
 ```
 
-## Including Plots
+# Extract gametes function
 
-You can also embed plots, for example:
+* The goal is to take the seed and leaf genotypes and extract which allele in the biparentally inherited leaf tissue came from the maternal tree and which came from the paternal tree. 
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+* The function returns a series of data objects (and optionally prints them to tab-delimited files):
+    + Haploid genetic data of maternal gametes
+    + Haploid genetic data of paternal gametes
+    + Diploid leaf and seed genotypes
+    + List of loci and alleles where gametic assignment is ambiguous
+    
+* In cases where the alleles are ambiguous (heterozygous at the same alleles for both leaf and seed tissue), we can treat them by:
+    + Convert them to missing data (mode = "NA")
+    + Assign partial allele frequencies (the default mode), with a 50% probablity of coming from either maternal or paternal tree (mode = "partial"). This outputs a separate file that lists the loci and alleles of the ambiguous cases. 
+    + The information in this file can then be used modify allele frequency or allele count tables to account for these ambiguous cases 
+    
+* Importantly, loci with ambiguous gametic assignment are assigned as missing data (NA) in the haploid genetic data output for maternal and paternal gametes! Further manipulation of these datasets are necessary to fully account for these ambiguous cases.    
+
+```{r}
+# Define function 
+extract_gametes <- function(leaf, 
+                            seed, 
+                            seedling_utms, 
+                            mode = "partial", 
+                            label, 
+                            write_files = FALSE){  
+
+  ## Initialize matrix to hold parental genotypes
+    paternal <- matrix(NA, nrow = nrow(seed), 
+                     ncol = attributes(seed)$n.loci)
+    
+    maternal <- matrix(NA, nrow = nrow(seed), 
+                     ncol = attributes(seed)$n.loci)  
+    
+  # Initialize counter for ambiguous heterozygotes
+    heterozygotes <- 0
+    locus_total <- 0
+    
+  ## Initialize dataframe to hold partial frequencies
+    # Column names here will be unique / specific to your study!
+    if(mode == "partial"){
+      partial <- data.frame(FIELD_NUMBER = NA, 
+                                     PLOT = NA, locus = NA, 
+                                     allele = NA, freq = NA)
+    }
+    
+
+    
+  ## Loop through each seedling and assign maternal and paternal gamete contributions 
+    
+  for(i in 1:nrow(seed)){ # Loop through rows
+   
+  # Print status update   
+    cat("\n Working on indv:", seed$FIELD_NUMBER[i], "...\n")
+      cat("---------------------------------------------\n")
+      
+    # Initialize index for locus column
+      locus_index <- 1 
+    
+    ## Loop through loci
+      for(locus in attributes(seed)$locus.columns){ 
+    
+      # Initialize paternal and maternal genotypes  
+        paternal_gen <- NA
+        maternal_gen <- NA
+        
+      # Pull out genotypes at seed and leaf tissue
+        seed_gen <- as.numeric(seed[i, c(locus, locus + 1)])
+        leaf_gen <- as.numeric(leaf[i, c(locus, locus + 1)])
+        
+        # If interested in testing out test cases:
+         
+            # Missing data at seed tissue
+              # seed_gen <- NA
+              # leaf_gen <- c(1,2)
+              
+            # Missing data at leaf tissue
+              # seed_gen <- c(1,2)
+              # leaf_gen <- NA
+              
+            # Mismatch between seed and leaf tissue
+              # seed_gen <- c(1,2)
+              # leaf_gen <- c(3,4)
+              
+            # Homozygous at leaf and seed
+              # seed_gen <- c(1,1)
+              # leaf_gen <- c(1,1)
+              
+            # Single match between seed tissue and leaf tissue
+              # seed_gen <- c(1,2)
+              # leaf_gen <- c(2,3)
+            
+            # Heterozygous at both leaf and seed tissue at same alleles
+              # seed_gen <- c(1,2)
+              # leaf_gen <- c(1,2)
+        
+        
+        # Find matches between alleles in seed tissue and leaf tissue, 
+          # which could be gametes coming from the maternal tree
+          # Can be length of 1 or 2
+       
+           maternal_match_TF <- leaf_gen %in% seed_gen
+  
+        # If all matches false..
+          # Means that there is either missing data at maternal locus
+          # Or mismatch between seed and leaf genotypes
+          # Either way.. assign as missing data
+        if(sum(maternal_match_TF) == 0){
+          maternal_gen <- NA
+          paternal_gen <- NA
+          
+          ## Check and print out information about a mismatch..
+          if(sum(!is.na(seed_gen)) == 2 & sum(!is.na(leaf_gen)) == 2){
+            cat("Leaf and seed mismatch at:", seed$FIELD_NUMBER[i], ": Locus", colnames(seed)[locus], "\n")
+          }
+        }
+          
+        ## If homozygous at leaf, one must come from the father.. 
+        ## and the same allele from the mother
+        ## Must not be just missing data though
+          if(leaf_gen[1] == leaf_gen[2] & any(!is.na(leaf_gen))){
+            paternal_gen <- leaf_gen[1]
+            maternal_gen <- leaf_gen[1]
+          }
+
+        ## If there is one match between seed and leaf
+        ## That match must come from the maternal tree, and other allele is paternal
+          if(sum(maternal_match_TF) == 1){
+            maternal_gen <- leaf_gen[maternal_match_TF]
+            paternal_gen <- leaf_gen[!maternal_match_TF]
+          }
+        
+        ## If heterozygote at leaf and seed
+          if(identical(seed_gen, leaf_gen) & 
+             length(unique(c(seed_gen, leaf_gen))) == 2){
+  
+          # Increment count of heterozygotes at both leaf and seed
+            heterozygotes <- heterozygotes + 1 
+            
+          # If mode is NA, set these ambiguous cases as missing data
+            if(mode == "NA"){
+              paternal_gen <- NA
+              maternal_gen <- NA
+            }
+          
+        
+         if(mode == "partial"){
+           
+           ## Make a DF that has the partial allele frequency for each potential allele
+           partial_temp <- data.frame(FIELD_NUMBER = seed$FIELD_NUMBER[i],
+                                               PLOT = seed$PLOT[i],
+                                               locus =  names(seed)[locus],
+                                               allele = leaf_gen,
+                                               freq = 0.5, 
+                                               stringsAsFactors = FALSE)
+
+  
+           ## Add to output
+            partial <- rbind(partial, partial_temp)
+
+           ## Save genotype as NA to maintain haploid format and because we don't want to double count alleles..
+             paternal_gen <- NA
+             maternal_gen <- NA
+         }
+        
+        } # End heterozygote / heterozygote if
+      
+    # Print status       
+       cat("Seed: ", seed_gen, "|| Leaf: ", leaf_gen, "|| Maternal: ", maternal_gen, "|| Paternal:", paternal_gen, "\n")
+    
+    # Assign alleles into dataframe 
+      maternal[i, locus_index] <- maternal_gen
+      paternal[i, locus_index] <- paternal_gen
+      
+    # Increment 
+      locus_index <- locus_index + 1
+      locus_total <- locus_total + 1
+    
+     } # End locus loop
+    
+  } # End row loop
+    
+    
+    
+  ### Print out ercentage of locus-ind combinations that were heterozygotes
+    
+    cat("Percentage of locus-ind combinations that were heterozygotes at same alleles:",
+      heterozygotes / locus_total, "\n")
+    
+   
+    
+  ### Maternal and paternal allele data frames that are returned from function or written to file
+    
+    ## Maternal
+      maternal_out <- data.frame(FIELD_NUMBER = seed$FIELD_NUMBER, 
+                                 PLOT = seed$PLOT,
+                                 maternal,
+                                 UTM1 = seedling_utms$UTM1,
+                                 UTM2 = seedling_utms$UTM2)
+      
+      colnames(maternal_out)[3:(3+length(attributes(seed)$locus.names)-1)] <- attributes(seed)$locus.names
+      
+      maternal_out
+    
+    
+    ## Paternal
+      paternal_out <- data.frame(FIELD_NUMBER = seed$FIELD_NUMBER, 
+                                 PLOT = seed$PLOT,
+                                 paternal,
+                                 UTM1 = seedling_utms$UTM1,
+                                 UTM2 = seedling_utms$UTM2)
+      
+      colnames(paternal_out)[3:(3+length(attributes(seed)$locus.names)-1)] <- attributes(seed)$locus.names
+      
+    
+
+    partial <- partial[-1, ] # Remove first NA row in partial DF
+
+    
+    # If write_files is true - then write genotype files and partial allele frequencies to file in Genalex format
+    if(write_files == TRUE){
+      
+      
+      ########################
+      ## WRITING OUTPUT TO FILE
+      
+      cat("Writing files...\n")
+      
+      # Suffix for file names
+      suffix = paste(Sys.Date(), ".txt", sep = "")
+   
+      ## Maternal gametes - Write to genalex format
+        sink(paste("./maternal_gametes", label, suffix))
+          
+          ## First line - Number of loci, number of individuals, and total samples per population
+          cat(length(attributes(seed)$locus.names), 
+              nrow(seed), length(table(seed$PLOT)), as.numeric(table(seed$PLOT)),"\n", sep = "\t")
+          
+          ## Second line is 3 tabs followed by population names
+          cat("","", "", names(table(seed$PLOT)), "\n", sep = "\t")
+          
+          write.table(maternal_out, sep = "\t", col.names = TRUE, quote = FALSE, row.names = FALSE)
+          
+        sink()
+      
+      
+      ## Paternal gametes - Write to genalex format
+        sink(paste("./paternal_gametes", label, suffix))
+        
+          ## First line - Number of loci, number of individuals, and total samples per population
+          cat("8", nrow(leaf), length(table(leaf$PLOT)), as.numeric(table(leaf$PLOT)),"\n", sep = "\t")
+          ## Second line is 3 tabs followed by population names
+          cat("","", "", names(table(leaf$PLOT)), "\n", sep = "\t")
+          
+          write.table(paternal_out, sep = "\t", col.names = TRUE, quote = FALSE, row.names = FALSE)
+          
+        sink()
+      
+      
+     ## Write partial allele frequencies to file
+      write.table(partial, 
+                  paste("./partial_frequencies", label, suffix),
+                  sep = "\t", row.names = FALSE)
+
+    } ## End write_files IF
+    
+    
+    ## Return output
+    return(list(maternal = maternal_out,
+                paternal = paternal_out, 
+                leaf = leaf,
+                seed = seed,
+                partial = partial))
+
+} ## End extract gametes function
+
+  
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+## Run extract gametes function
+
+```{r}
+gametes_out <- extract_gametes(leaf = leaf, 
+                               seed = seed, 
+                               seedling_utms =  seedling_utms, 
+                               label = "BBS", # Label to include in file names if writing to file
+                               mode = "partial", 
+                               write_files = TRUE)
+
+summary(gametes_out)
+```
+
+
+
+
+
+
